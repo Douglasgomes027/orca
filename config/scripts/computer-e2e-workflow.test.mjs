@@ -70,9 +70,13 @@ describe('computer-use e2e workflow', () => {
     const nativeSmokeRuns = workflow.jobs['native-smoke'].steps
       .map((step) => step.run)
       .filter((run) => typeof run === 'string')
+    const checkout = workflow.jobs['native-smoke'].steps.find(
+      (step) => step.uses === 'actions/checkout@v6'
+    )
     const regressionRun = nativeSmokeRuns.find((run) => run.includes('pnpm vitest run'))
     const expectedRegressionFiles = [
       'config/scripts/computer-e2e-workflow.test.mjs',
+      'config/scripts/macos-computer-helper-owner-loss-processes.test.mjs',
       'config/scripts/computer-use-modifier-safety.test.mjs',
       'config/scripts/computer-use-skill-guidance.test.mjs',
       'config/scripts/computer-use-smoke.test.mjs',
@@ -106,10 +110,49 @@ describe('computer-use e2e workflow', () => {
       'src/shared/remote-runtime-client.test.ts'
     ]
 
+    expect(checkout.with['persist-credentials']).toBe(false)
     expect(regressionRun).toBeTruthy()
     for (const file of expectedRegressionFiles) {
       expect(regressionRun).toContain(file)
     }
+  })
+
+  it('builds and tests the macOS helper on pull requests without TCC e2e', () => {
+    const workflow = parse(
+      readFileSync(join(projectDir, '.github/workflows/computer-e2e.yml'), 'utf8')
+    )
+    const job = workflow.jobs['mac-native-owner-smoke']
+    const runs = job.steps.map((step) => step.run).filter((run) => typeof run === 'string')
+    const checkout = job.steps.find((step) => step.uses === 'actions/checkout@v6')
+
+    expect(job.if).toBe("github.event_name == 'pull_request'")
+    expect(job['runs-on']).toBe('macos-15')
+    expect(checkout.with['persist-credentials']).toBe(false)
+    expect(runs).toContain('pnpm bench:macos-computer-helper-owner-loss --expect reaped --trials 1')
+    expect(runs).toContain(
+      'pnpm vitest run config/scripts/macos-computer-helper-owner-loss-processes.test.mjs'
+    )
+    expect(runs).toContain('pnpm verify:computer-native')
+    expect(runs.join('\n')).not.toContain('test:e2e:computer')
+    expect(workflow.on.pull_request.paths).toEqual(
+      expect.arrayContaining([
+        'config/scripts/macos-computer-helper-owner-loss-benchmark.mjs',
+        'config/scripts/macos-computer-helper-owner-loss-metrics.mjs',
+        'config/scripts/macos-computer-helper-owner-loss-processes.mjs',
+        'config/scripts/macos-computer-helper-owner-loss-processes.test.mjs'
+      ])
+    )
+  })
+
+  it('runs deterministic macOS owner-loss benchmark cleanup coverage', () => {
+    const benchmark = readFileSync(
+      join(projectDir, 'config/scripts/macos-computer-helper-owner-loss-benchmark.mjs'),
+      'utf8'
+    )
+
+    expect(benchmark).toContain('spawnBenchmarkProcess(executable, [launcherDir]')
+    expect(benchmark).toContain("stdio: ['ignore', stdoutDescriptor, stderrDescriptor]")
+    expect(benchmark).toContain('killRecordedProcess(helperRecordPath, helperPath)')
   })
 
   it('boots the built daemon under plain Node in the PR native-smoke job after the main build', () => {
